@@ -52,6 +52,8 @@ try:
     print("[+] Using already installed pip (version {:s})".format(pip.__version__))
 except ImportError:
     print("[+] Installing pip")
+    # pip is built-in Python 3 since 3.4, so we assume Python 2 here
+    # We won't support Python >= 3.0 and < 3.4 unless there's a high demand
     import urllib2
 
     if sys.hexversion < 0x02070900:
@@ -91,13 +93,13 @@ if pip_install(IPYIDA_PACKAGE_LOCATION) != 0:
         raise Exception("ipyida package installation failed")
 
 if not os.path.exists(idaapi.get_user_idadir()):
-    os.makedirs(idaapi.get_user_idadir(), 0755)
+    os.makedirs(idaapi.get_user_idadir(), 0o755)
 
 ida_python_rc_path = os.path.join(idaapi.get_user_idadir(), "idapythonrc.py")
 rc_file_content = ""
 
 if os.path.exists(ida_python_rc_path):
-    with file(ida_python_rc_path, "r") as rc:
+    with open(ida_python_rc_path, "r") as rc:
         rc_file_content = rc.read()
 
 if "# BEGIN IPyIDA loading" in rc_file_content:
@@ -113,7 +115,7 @@ if "# BEGIN IPyIDA loading" in rc_file_content:
 
 ipyida_stub_target_path = os.path.join(idaapi.get_user_idadir(), "plugins", "ipyida.py")
 if not os.path.exists(os.path.dirname(ipyida_stub_target_path)):
-    os.makedirs(os.path.dirname(ipyida_stub_target_path), 0755)
+    os.makedirs(os.path.dirname(ipyida_stub_target_path), 0o755)
 
 shutil.copyfile(
     pkg_resources.resource_filename("ipyida", "ipyida_plugin_stub.py"),
