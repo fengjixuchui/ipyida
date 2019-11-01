@@ -67,7 +67,8 @@ except ImportError:
         p = subprocess.Popen(
             sys.executable,
             stdin=subprocess.PIPE,
-            stdout=sys.stdout
+            stdout=sys.stdout,
+            stderr=sys.stdout
         )
         p.communicate(get_pip)
     try:
@@ -82,7 +83,8 @@ def pip_install(package, extra_args=[]):
         p = subprocess.Popen(
             pip_install_cmd + extra_args + [ package ],
             stdin=subprocess.PIPE,
-            stdout=sys.stdout
+            stdout=sys.stdout,
+            stderr=sys.stdout
         )
         ret = p.wait()
     return ret
@@ -91,6 +93,14 @@ if pip_install(IPYIDA_PACKAGE_LOCATION) != 0:
     print("[.] ipyida system-wide package installation failed, trying user install")
     if pip_install(IPYIDA_PACKAGE_LOCATION, [ "--user" ]) != 0:
         raise Exception("ipyida package installation failed")
+    else:
+        # If no packages were installed in user site-packages, the path may
+        # not be in sys.path in current Python process. Importing ipyida will
+        # fail until Python (or IDA) is restarted. We can "refresh" sys.path
+        # using site.main().
+        import site
+        if site.getusersitepackages() not in sys.path:
+            site.main()
 
 if not os.path.exists(idaapi.get_user_idadir()):
     os.makedirs(idaapi.get_user_idadir(), 0o755)
