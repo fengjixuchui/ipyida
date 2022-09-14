@@ -17,32 +17,40 @@ def is_using_pyqt5():
         return False
 
 if is_using_pyqt5():
-    from PyQt5 import QtGui, QtWidgets
+    from PyQt5 import QtGui, QtWidgets, QtCore
 else:
-    from PySide import QtGui
+    from PySide import QtGui, QtCore
 
 import sys
+import os
+import types
 
 # QtSvg binairies are not bundled with IDA. So we monkey patch PySide to avoid
 # IPython to load a module with missing binary files. This *must* happend before
 # importing RichJupyterWidget
 if is_using_pyqt5():
-    # In the case of pyqt5, we have to avoid patch the binding detection too.
-    import qtconsole.qt_loaders
-    original_has_binding = qtconsole.qt_loaders.has_binding
-    def hooked_has_bindings(arg):
-        if arg == 'pyqt5':
-            return True
-        else:
-            return original_has_binding(arg)
-    qtconsole.qt_loaders.has_binding = hooked_has_bindings
+    try:
+        # In the case of pyqt5, we have to avoid patch the binding detection
+        # used in qtconsole <= 4.6.
+        import qtconsole.qt_loaders
+        original_has_binding = qtconsole.qt_loaders.has_binding
+        def hooked_has_bindings(arg):
+            if arg == 'pyqt5':
+                return True
+            else:
+                return original_has_binding(arg)
+        qtconsole.qt_loaders.has_binding = hooked_has_bindings
+    except ImportError:
+        # qtconsole.qt_loaders doesn't exist in qtconsole >= 4.7. It uses QtPy.
+        os.environ["QT_API"] = "pyqt5"
     import PyQt5
-    PyQt5.QtSvg = None
-    PyQt5.QtPrintSupport = type("EmptyQtPrintSupport", (), {})
+    sys.modules["PyQt5.QtSvg"] = types.ModuleType("EmptyQtSvg")
+    sys.modules["PyQt5.QtPrintSupport"] = types.ModuleType("EmptyQtPrintSupport")
 else:
     import PySide
-    PySide.QtSvg = None
-    PySide.QtPrintSupport = type("EmptyQtPrintSupport", (), {})
+    sys.modules["PySide.QtSvg"] = types.ModuleType("EmptyQtSvg")
+    sys.modules["PySide.QtPrintSupport"] = types.ModuleType("EmptyQtPrintSupport")
+    os.environ["QT_API"] = "pyside"
 
 from qtconsole.rich_jupyter_widget import RichJupyterWidget
 from qtconsole.manager import QtKernelManager
@@ -52,6 +60,10 @@ import ipyida.kernel
 
 class IdaRichJupyterWidget(RichJupyterWidget):
     def _is_complete(self, source, interactive):
+        if ipyida.kernel.is_using_ipykernel_5():
+            # The kernel is running on the QT runloop so no need to call
+            # `do_one_iteration`
+            return super(IdaRichJupyterWidget, self)._is_complete(source, interactive)
         # The original implementation in qtconsole is synchronous. IDA Python is
         # single threaded and the IPython kernel runs on the same thread as the
         # UI so the is_complete request can never be processed by the kernel,
@@ -89,6 +101,36 @@ class IdaRichJupyterWidget(RichJupyterWidget):
                 status = reply['content'].get('status', u'complete')
                 indent = reply['content'].get('indent', u'')
                 return status != 'incomplete', indent
+
+    def _action_on_click(self, string):
+        import re
+        try:
+            addr = int(string, 16)
+        except ValueError:
+            addr = idaapi.get_name_ea(idaapi.get_inf_structure().min_ea, string)
+        if addr >= idaapi.get_inf_structure().min_ea and \
+           addr <  idaapi.get_inf_structure().max_ea:
+            return lambda: idaapi.jumpto(addr)
+        else:
+            return None
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress):
+            if event.modifiers() & QtCore.Qt.ControlModifier:
+                cursor = self._control.cursorForPosition(event.pos())
+                # Note: the cursor is a copy, so selection wont' affect the
+                # visible QTextEdit
+                cursor.select(QtGui.QTextCursor.WordUnderCursor)
+                action = self._action_on_click(cursor.selectedText())
+                if action:
+                    self._control.viewport().setCursor(QtCore.Qt.PointingHandCursor)
+                    if event.button() == QtCore.Qt.LeftButton:
+                        action()
+                else:
+                    self._control.viewport().setCursor(QtCore.Qt.IBeamCursor)
+            else:
+                self._control.viewport().setCursor(QtCore.Qt.IBeamCursor)
+        return super(IdaRichJupyterWidget, self).eventFilter(obj, event)
 
 _user_widget_options = {}
 
@@ -166,7 +208,7 @@ class IPythonConsole(idaapi.PluginForm):
 
     def OnClose(self, form):
         try:
-            pass
+            self.kernel_client.stop_channels()
         except:
             import traceback
             print(traceback.format_exc())
